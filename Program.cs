@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Security.AccessControl;
 using System.Text;
 
 namespace Game
@@ -10,127 +12,92 @@ namespace Game
         {
             Console.OutputEncoding = UTF8Encoding.UTF8;
 
-            GameAccount ghostRider = new GameAccount("GhostRider");
-            GameAccount iceBlade = new GameAccount("IceBlade");
+            // симуляція бд
+            DBContext dbContext = new DBContext();
 
-            ghostRider.WinGame(iceBlade, 20);
-            iceBlade.LoseGame(ghostRider, 20);
-            iceBlade.WinGame(ghostRider, 30);
-            iceBlade.LoseGame(ghostRider, 20);
-            iceBlade.WinGame(ghostRider, 30);
+            // об'єкти репозиторію гри та сервісу гри
+            RepositoryGames gameRepo = new RepositoryGames(dbContext);
+            GameService gameService = new GameService(gameRepo);
 
-            ghostRider.GetStats();
-            iceBlade.GetStats();
+            // гравці: об'єкти репозиторію та сервісу
+            RepositoryPlayers accountRepo = new RepositoryPlayers(dbContext);
+            PlayerService playerService = new PlayerService(accountRepo);
+
+            GameAccount player1 = AccountFactory.CreateAccount("Гравець1");
+            GameAccount player2 = AccountFactory.CreateAccount("Гравець2", "Ban");
+            GameAccount player3 = AccountFactory.CreateAccount("Гравець3", "Premium");
+
+            GameAccount ghostRider = accountRepo.ReadByName("ghostRider");
+
+
+            // Створення об'єкта класу GameEngine
+            GameEngine gameEngine = new GameEngine(gameService, playerService);
+
+            gameEngine.SimulateGame(player1, player2, "StandartGame");
+            gameEngine.SimulateGame(player2, player3, "TrainingGame");
+            gameEngine.SimulateGame(player3, player2, "StandartGame");
+
+            player1.GetStats();
+            player2.GetStats();
+            player3.GetStats();
+
+            // отримуємо всі акаунти та ігри з сервісу
+            var allPlayers = playerService.GetAllAccounts();
+            var allGames = gameService.GetAllGames();
+
+            PlayerPrinter playerPrinter = new PlayerPrinter();
+            GameHistoryPrinter gamePrinter = new GameHistoryPrinter();
+
+            playerPrinter.PrintAllPlayers(allPlayers);
+            gamePrinter.PrintHistoryGames(allGames);
         }
+
     }
 
-    class GameAccount
+    class GameEngine
     {
-        private static int _gameIDCounter = 0;
-        private List<Game> _historyOfGames = new List<Game>();
-        private int _currentRating;
+        private Random _random;
+        private readonly GameService _gameService;
+        private readonly PlayerService _playerService;
 
-        public string UserName { get; set; }
-        public int CurrentRating
+        public GameEngine(GameService gameService, PlayerService playerService)
         {
-            get
-            {
-                return _currentRating;
-            }
-            set
-            {
-                _currentRating = (value < 1) ? 1 : value;
-            }
-        }
-        public int GamesCount { get; set; }
-
-        public GameAccount(string userName)
-        {
-            UserName = userName;
-            CurrentRating = 1;
-            GamesCount = 0;
+            _random = new Random();
+            _gameService = gameService;
+            _playerService = playerService;
         }
 
-        public void WinGame(GameAccount opponent, int rating)
+        public void SimulateGame(GameAccount player1, GameAccount player2, string gameType)
         {
-            if (rating < 0)
+            if (_playerService.GetAccountByName(player1.UserName) == null)
             {
-                throw new Exception("Від'ємний рейтинг");
+                _playerService.CreateAccount(player1);
             }
 
-            this.CurrentRating += rating;
-            opponent.CurrentRating -= rating;
-
-            var game = new Game(this.UserName, opponent.UserName, rating);
-            this._historyOfGames.Add(game);
-            opponent._historyOfGames.Add(game);
-
-            this.GamesCount++;
-            opponent.GamesCount++;
-        }
-
-        public void LoseGame(GameAccount opponent, int rating)
-        {
-            if (rating < 0)
+            if (_playerService.GetAccountByName(player2.UserName) == null)
             {
-                throw new Exception("Від'ємний рейтинг");
+                _playerService.CreateAccount(player2);
             }
 
-            this.CurrentRating -= rating;
-            opponent.CurrentRating += rating;
+            bool player1Wins = _random.Next(2) == 0;
+            Game game;
 
-            var game = new Game(opponent.UserName, this.UserName, rating);
-            this._historyOfGames.Add(game);
-            opponent._historyOfGames.Add(game);
-
-            this.GamesCount++;
-            opponent.GamesCount++;
-        }
-
-        public void GetStats()
-        {
-            Console.WriteLine($"Історія ігор гравця {UserName}:");
-            Console.WriteLine($"{"Номер гри",-15}{"Опонент",-20}{"Результат",-15}{"Рейтинг",-10}");
-            Console.WriteLine(new string('-', 60));
-
-            foreach (Game game in _historyOfGames)
+            if (player1Wins)
             {
-                string result = game.Winner == UserName ? "Перемога" : "Програш";
-                Console.Write($"{game.GameID,-15}");
-                Console.Write($"{(game.Winner == UserName ? game.Loser : game.Winner),-20}");
-                Console.Write($"{result,-15}");
-                Console.Write($"{game.Rating,-10}");
-                Console.WriteLine();
+                game = GameFactory.CreateGame(gameType, player1, player2);
+                player1.WinGame(player2, game);
+            }
+            else
+            {
+                game = GameFactory.CreateGame(gameType, player2, player1);
+                player1.LoseGame(player2, game);
             }
 
-            int numberOfWins = _historyOfGames.Count(game => game.Winner == UserName);
-            int numberOfLosses = _historyOfGames.Count(game => game.Loser == UserName);
-
-            Console.WriteLine();
-            Console.WriteLine($"Статистика гравця {UserName}:");
-            Console.WriteLine($"Кількість ігор: {GamesCount}");
-            Console.WriteLine($"Поточний рейтинг: {CurrentRating}");
-            Console.WriteLine($"Кількість перемог: {numberOfWins}");
-            Console.WriteLine($"Кількість поразок: {numberOfLosses}");
-            Console.WriteLine();
+            _gameService.CreateGame(game);
         }
+
+
     }
 
-    class Game
-    {
-        private static int _gameIDCounter = 0;
 
-        public int GameID { get; private set; }
-        public string Winner { get; private set; }
-        public string Loser { get; private set; }
-        public int Rating { get; private set; }
-
-        public Game(string winner, string loser, int rating)
-        {
-            GameID = ++_gameIDCounter;
-            Winner = winner;
-            Loser = loser;
-            Rating = rating;
-        }
-    }
 }
